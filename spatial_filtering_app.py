@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 from scipy import ndimage as ndi
 from skimage.metrics import structural_similarity as ssim
 from PIL import Image
-import datetime
 
 # -------------------------
 # Utility / Filter Functions
@@ -89,8 +88,9 @@ def sobel_filter(img, ksize=3):
 
 
 def laplacian_filter(img, ksize=3):
+    """Return signed Laplacian (not absolute) for proper sharpening."""
     lap = cv2.Laplacian(img, cv2.CV_64F, ksize=ksize)
-    return np.clip(np.absolute(lap), 0, 255).astype(np.uint8)
+    return lap  # keep signed values
 
 
 def sobel_then_laplacian(img, sobel_ksize=3, lap_ksize=3):
@@ -98,7 +98,7 @@ def sobel_then_laplacian(img, sobel_ksize=3, lap_ksize=3):
     lap = cv2.Laplacian(s, cv2.CV_64F, ksize=lap_ksize)
     return np.clip(np.absolute(lap), 0, 255).astype(np.uint8)
 
-# Combined helper (keeps your original API)
+# Combined helper
 
 
 def apply_smoothing_then_sharpening(img, smoothing_name, smoothing_param, sharpening_name, sharpening_param):
@@ -121,7 +121,9 @@ def apply_smoothing_then_sharpening(img, smoothing_name, smoothing_param, sharpe
     if sharpening_name == "Sobel":
         sharp = sobel_filter(smooth, sharpening_param)
     elif sharpening_name == "Laplacian":
-        sharp = laplacian_filter(smooth, sharpening_param)
+        lap = laplacian_filter(smooth, sharpening_param)
+        sharp = np.clip(smooth.astype(np.float64) -
+                        lap, 0, 255).astype(np.uint8)
     elif sharpening_name == "Sobel + Laplacian":
         sharp = sobel_then_laplacian(
             smooth, sharpening_param, sharpening_param)
@@ -159,7 +161,6 @@ This app demonstrates smoothing and sharpening filters (Mean, Median, Mode, Min,
 It supports noise injection, filter parameter control, combined pipelines, and metrics (PSNR, SSIM).
 """)
 
-# layout: sidebar for controls, main area for results
 with st.sidebar:
     st.header("Controls")
 
@@ -191,7 +192,20 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("**Download**")
-    download_btn = st.button("Download Last Result")
+    if "last_result" in st.session_state and st.session_state["last_result"] is not None:
+        buf = io.BytesIO()
+        Image.fromarray(st.session_state["last_result"]).save(
+            buf, format="PNG")
+        st.download_button(
+            "📥 Download Processed Image",
+            data=buf.getvalue(),
+            file_name="processed.png",
+            mime="image/png",
+        )
+
+    st.markdown("---")
+    st.caption(
+        "ℹ️ All uploaded images are converted to grayscale internally for processing.")
 
 # state holder
 if 'last_result' not in st.session_state:
@@ -210,8 +224,6 @@ if uploaded is not None:
 else:
     img = None
 
-# helper to display matplotlib figures in-streamlit
-
 
 def show_matplotlib_figure(fig):
     st.pyplot(fig)
@@ -220,7 +232,6 @@ def show_matplotlib_figure(fig):
 # Results area
 if st.session_state['original'] is None:
     st.info("Upload an image to begin (or try one of the sample images).")
-    # optionally show sample images area or instructions
 else:
     original = st.session_state['original']
     # apply optional noise first
@@ -230,10 +241,25 @@ else:
     elif noise_type == "Salt & Pepper":
         noisy = add_salt_pepper_noise(original, amount=sp_amount)
 
+        # Reset last result whenever noise type or params change
+    if "prev_noise_type" not in st.session_state:
+        st.session_state["prev_noise_type"] = noise_type
+    if "prev_gaussian_sigma" not in st.session_state:
+        st.session_state["prev_gaussian_sigma"] = gaussian_sigma
+    if "prev_sp_amount" not in st.session_state:
+        st.session_state["prev_sp_amount"] = sp_amount
+
+    if (noise_type != st.session_state["prev_noise_type"] or
+        gaussian_sigma != st.session_state["prev_gaussian_sigma"] or
+            sp_amount != st.session_state["prev_sp_amount"]):
+        st.session_state["last_result"] = None
+
+    st.session_state["prev_noise_type"] = noise_type
+    st.session_state["prev_gaussian_sigma"] = gaussian_sigma
+    st.session_state["prev_sp_amount"] = sp_amount
+
     # Buttons actions
     if apply_individual:
-        # smoothing only
-        smooth = None
         if smoothing_method == "Mean":
             smooth = mean_filter(noisy, smoothing_ksize)
         elif smoothing_method == "Median":
@@ -248,17 +274,17 @@ else:
         st.success(f"{smoothing_method} smoothing applied")
 
     if apply_sharpen:
-        # sharpening only (on noisy/original)
         if sharpening_method == "Sobel":
             sharpened = sobel_filter(noisy, sharpening_ksize)
             st.session_state['last_result'] = sharpened
             st.success("Sobel sharpening applied")
         elif sharpening_method == "Laplacian":
             lap = laplacian_filter(noisy, sharpening_ksize)
-            diff = cv2.subtract(noisy, lap)
-            st.session_state['last_result'] = lap
+            sharpened = np.clip(noisy.astype(np.float64) -
+                                lap, 0, 255).astype(np.uint8)
+            st.session_state['last_result'] = sharpened
             st.success("Laplacian sharpening applied")
-        else:  # Sobel + Laplacian
+        else:
             sl = sobel_then_laplacian(
                 noisy, sharpening_ksize, sharpening_ksize)
             st.session_state['last_result'] = sl
@@ -276,7 +302,7 @@ else:
         st.success(
             f"Pipeline applied: {smoothing_method} then {sharpening_method}")
 
-    # Display outputs (images + histograms + metrics)
+    # Display outputs
     tabs = st.tabs(["Images", "Histograms", "Metrics", "Kernels & Notes"])
     with tabs[0]:
         st.subheader("Image Views")
@@ -285,7 +311,7 @@ else:
             st.image(original, caption="Original",
                      use_container_width=True, clamp=True)
         with col2:
-            st.image(noisy, caption="Noisy / Input",
+            st.image(noisy, caption="Input (with noise if applied)",
                      use_container_width=True, clamp=True)
         with col3:
             if st.session_state['last_result'] is not None:
@@ -294,30 +320,29 @@ else:
             else:
                 st.write("No result yet. Use the control buttons.")
 
-        # If last result exists and is Laplacian, show the special 3-image case
+       # Laplacian 3-image special view
         if st.session_state['last_result'] is not None and sharpening_method == "Laplacian":
             st.markdown(
-                "### Laplacian special view (Original, Laplacian filtered, Original - Filtered)")
-            smooth, sharp_use = apply_smoothing_then_sharpening(
-                noisy, smoothing_method, smoothing_ksize, sharpening_method, sharpening_ksize
-            )
-            diff_img = cv2.subtract(smooth, sharp_use)
-            fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-            axes[0].imshow(smooth, cmap='gray')
-            axes[0].set_title("Smoothed")
-            axes[0].axis('off')
-            axes[1].imshow(sharp_use, cmap='gray')
-            axes[1].set_title("Laplacian Filtered")
-            axes[1].axis('off')
-            axes[2].imshow(diff_img, cmap='gray')
-            axes[2].set_title("Smoothed - Filtered")
-            axes[2].axis('off')
-            plt.tight_layout()
-            show_matplotlib_figure(fig)
+                "### Laplacian special view (Smoothed, Laplacian Response, Sharpened)")
+
+            lap = laplacian_filter(noisy, sharpening_ksize)
+            lap_display = np.clip(lap, 0, 255).astype(np.uint8)
+            diff_img = np.clip(noisy.astype(np.float64) -
+                               lap, 0, 255).astype(np.uint8)
+
+            colA, colB, colC = st.columns(3)
+            with colA:
+                st.image(noisy, caption="Input (after noise)",
+                         use_container_width=True, clamp=True)
+            with colB:
+                st.image(lap_display, caption="Laplacian Response",
+                         use_container_width=True, clamp=True)
+            with colC:
+                st.image(diff_img, caption="Sharpened (Input - Laplacian)",
+                         use_container_width=True, clamp=True)
 
     with tabs[1]:
         st.subheader("Histograms")
-        # show histograms of original / noisy / last_result
         fig, axes = plt.subplots(1, 3, figsize=(15, 4))
         axes[0].hist(original.ravel(), bins=256, range=(0, 255))
         axes[0].set_title("Original")
@@ -373,13 +398,3 @@ else:
         - Combined pipeline available.
         - Visual outputs + histograms + kernels + metrics (PSNR, SSIM).
         """)
-    # Download button functionality
-    if download_btn:
-        if st.session_state['last_result'] is None:
-            st.warning("No processed image to download.")
-        else:
-            buf = cv2.imencode('.png', st.session_state['last_result'])[
-                1].tobytes()
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            st.download_button("Download processed image", data=buf,
-                               file_name=f"processed_{ts}.png", mime="image/png")
