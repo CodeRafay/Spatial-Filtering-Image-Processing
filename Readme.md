@@ -55,8 +55,8 @@ Prevents noise amplification, produces clearer edges.
 Clone the repo and open in **Google Colab**:
 
 ```bash
-git clone https://github.com/YourUsername/spatial-filtering-dashboard.git
-cd spatial-filtering-dashboard
+git clone https://github.com/CodeRafay/Spatial-Filtering-Image-Processing.git
+cd spatial-filtering-image-processing
 ```
 
 Then open the notebook in Colab and run all cells.
@@ -107,3 +107,4 @@ If you use this project in research or coursework, please cite:
 ## 🏷️ Keywords
 
 Image Processing, Spatial Filters, Smoothing, Sharpening, Sobel, Laplacian, Median Filter, Edge Detection, Colab Dashboard
+
